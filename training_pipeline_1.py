@@ -74,7 +74,7 @@ transforms_validation = ComposeDouble([
 random_seed = 42
 
 # split dataset into training set and validation set
-train_size = 0.8  # 80:20 split
+train_size = 0.9
 
 inputs_train, inputs_valid, targets_train, targets_valid = train_test_split(
     inputs,
@@ -129,7 +129,7 @@ model = UNet(in_channels=3,
 criterion = torch.nn.CrossEntropyLoss()
 
 # optimizer
-optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+optimizer = torch.optim.SGD(model.parameters(), lr=0.02)
 
 # trainer
 trainer = Trainer(model=model,
@@ -153,7 +153,7 @@ training_losses, validation_losses, lr_rates = trainer.run_trainer()
 #%%
 
 # save the model
-model_name =  'carvana_model.pt'
+model_name = 'model_epochs-10_lr-002.pt'
 torch.save(model.state_dict(), pathlib.Path.cwd() / model_name)
 
 #%% md
@@ -186,13 +186,13 @@ optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
 
 #%%
 
-from lr_rate_finder import LearningRateFinder
-lrf = LearningRateFinder(model, criterion, optimizer, device)
-lrf.fit(dataloader_training, steps=1000)
-
-#%%
-
-lrf.plot()
+# from lr_rate_finder import LearningRateFinder
+# lrf = LearningRateFinder(model, criterion, optimizer, device)
+# lrf.fit(dataloader_training, steps=1000)
+#
+# #%%
+#
+# lrf.plot()
 
 #%% md
 
@@ -202,3 +202,4 @@ lrf.plot()
 
 from visual import plot_training
 fig = plot_training(training_losses, validation_losses, lr_rates, gaussian=True, sigma=1, figsize=(10, 4))
+fig.savefig("fig_epochs-10_lr-002.jpg")
