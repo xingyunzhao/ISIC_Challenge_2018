@@ -13,7 +13,12 @@ import albumentations
 from visual import plot_training
 
 # root directory
-root = pathlib.Path.cwd() / 'Data' / '2018'
+root = pathlib.Path.cwd()
+path_data = root / 'Data' / '2018'
+path_output = root / "Output"
+path_temp = root / "temp_chkp"
+
+use_saved_data = True
 
 
 def get_filenames_of_path(path: pathlib.Path, ext: str = '*'):
@@ -23,91 +28,103 @@ def get_filenames_of_path(path: pathlib.Path, ext: str = '*'):
 
 
 def main():
-    # input and target files
-    inputs = get_filenames_of_path(root / 'ISIC2018_Task1-2_Training_Input', ext='*.jpg')
-    targets = get_filenames_of_path(root / 'ISIC2018_Task1_Training_GroundTruth', ext='*.png')
+    if use_saved_data:
+        dataset_train = torch.load(path_temp / 'dataset_train.pt')
+        dataset_valid = torch.load(path_temp / 'dataset_valid.pt')
 
-    # use small set of data for demo
-    inputs = inputs[:200]
-    targets = targets[:200]
+    else:
 
-    # pre-transformations
-    pre_transforms = ComposeDouble([
-        FunctionWrapperDouble(resize,
-                              input=True,
-                              target=False,
-                              output_shape=(128, 128, 3)),
-        FunctionWrapperDouble(resize,
-                              input=False,
-                              target=True,
-                              output_shape=(128, 128),
-                              order=0,
-                              anti_aliasing=False,
-                              preserve_range=True),
-    ])
+        # input and target files
+        inputs = get_filenames_of_path(path_data / 'ISIC2018_Task1-2_Training_Input', ext='*.jpg')
+        targets = get_filenames_of_path(path_data / 'ISIC2018_Task1_Training_GroundTruth', ext='*.png')
 
-    # training transformations and augmentations
-    transforms_training = ComposeDouble([
-        AlbuSeg2d(albumentations.HorizontalFlip(p=0.5)),
-        FunctionWrapperDouble(create_dense_target, input=False, target=True),
-        FunctionWrapperDouble(np.moveaxis, input=True, target=False, source=-1, destination=0),
-        FunctionWrapperDouble(normalize_01)
-    ])
+        # use small set of data for demo
+        # inputs = inputs[:200]
+        # targets = targets[:200]
 
-    # validation transformations
-    transforms_validation = ComposeDouble([
-        FunctionWrapperDouble(resize,
-                              input=True,
-                              target=False,
-                              output_shape=(128, 128, 3)),
-        FunctionWrapperDouble(resize,
-                              input=False,
-                              target=True,
-                              output_shape=(128, 128),
-                              order=0,
-                              anti_aliasing=False,
-                              preserve_range=True),
-        FunctionWrapperDouble(create_dense_target, input=False, target=True),
-        FunctionWrapperDouble(np.moveaxis, input=True, target=False, source=-1, destination=0),
-        FunctionWrapperDouble(normalize_01)
-    ])
+        # pre-transformations
+        pre_transforms = ComposeDouble([
+            FunctionWrapperDouble(resize,
+                                  input=True,
+                                  target=False,
+                                  output_shape=(128, 128, 3)),
+            FunctionWrapperDouble(resize,
+                                  input=False,
+                                  target=True,
+                                  output_shape=(128, 128),
+                                  order=0,
+                                  anti_aliasing=False,
+                                  preserve_range=True),
+        ])
 
-    # random seed
-    random_seed = 42
+        # training transformations and augmentations
+        transforms_training = ComposeDouble([
+            AlbuSeg2d(albumentations.HorizontalFlip(p=0.5)),
+            FunctionWrapperDouble(create_dense_target, input=False, target=True),
+            FunctionWrapperDouble(np.moveaxis, input=True, target=False, source=-1, destination=0),
+            FunctionWrapperDouble(normalize_01)
+        ])
 
-    # split dataset into training set and validation set
-    train_size = 0.9
+        # validation transformations
+        transforms_validation = ComposeDouble([
+            FunctionWrapperDouble(resize,
+                                  input=True,
+                                  target=False,
+                                  output_shape=(128, 128, 3)),
+            FunctionWrapperDouble(resize,
+                                  input=False,
+                                  target=True,
+                                  output_shape=(128, 128),
+                                  order=0,
+                                  anti_aliasing=False,
+                                  preserve_range=True),
+            FunctionWrapperDouble(create_dense_target, input=False, target=True),
+            FunctionWrapperDouble(np.moveaxis, input=True, target=False, source=-1, destination=0),
+            FunctionWrapperDouble(normalize_01)
+        ])
 
-    inputs_train, inputs_valid, targets_train, targets_valid = train_test_split(
-        inputs,
-        targets,
-        random_state=random_seed,
-        train_size=train_size,
-        shuffle=True)
+        # random seed
+        random_seed = 42
 
-    # dataset training
-    dataset_train = SegmentationDataSet3(inputs=inputs_train,
-                                        targets=targets_train,
-                                        transform=transforms_training,
-                                        use_cache=True,
-                                        pre_transform=pre_transforms)
+        # split dataset into training set and validation set
+        train_size = 0.9
 
-    # dataset validation
-    dataset_valid = SegmentationDataSet3(inputs=inputs_valid,
-                                        targets=targets_valid,
-                                        transform=transforms_validation,
-                                        use_cache=True,
-                                        pre_transform=pre_transforms)
+        inputs_train, inputs_valid, targets_train, targets_valid = train_test_split(
+            inputs,
+            targets,
+            random_state=random_seed,
+            train_size=train_size,
+            shuffle=True)
+
+        # dataset training
+        dataset_train = SegmentationDataSet3(inputs=inputs_train,
+                                            targets=targets_train,
+                                            transform=transforms_training,
+                                            use_cache=True,
+                                            pre_transform=pre_transforms)
+
+        # dataset validation
+        dataset_valid = SegmentationDataSet3(inputs=inputs_valid,
+                                            targets=targets_valid,
+                                            transform=transforms_validation,
+                                            use_cache=True,
+                                            pre_transform=pre_transforms)
+
+        # save dataset
+        torch.save(dataset_train, path_temp / 'dataset_train.pt')
+        torch.save(dataset_valid, path_temp / 'dataset_valid.pt')
+
 
     # dataloader training
     dataloader_training = DataLoader(dataset=dataset_train,
-                                     batch_size=2,
+                                     batch_size=20,
                                      shuffle=True)
 
     # dataloader validation
     dataloader_validation = DataLoader(dataset=dataset_valid,
-                                       batch_size=2,
+                                       batch_size=20,
                                        shuffle=True)
+
 
     #%%
 
@@ -156,7 +173,7 @@ def main():
 
     # save the model
     model_name = 'test.pt'
-    torch.save(model.state_dict(), pathlib.Path.cwd() / model_name)
+    torch.save(model.state_dict(), path_output / model_name)
 
     #%% md
 
@@ -197,7 +214,7 @@ def main():
 
     # Plot results
     fig = plot_training(training_losses, validation_losses, lr_rates, gaussian=True, sigma=1, figsize=(10, 4))
-    fig.savefig("test.jpg")
+    fig.savefig(path_output / "test_1.jpg")
 
 
 if __name__ == '__main__':
