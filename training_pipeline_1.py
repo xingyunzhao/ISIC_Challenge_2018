@@ -1,4 +1,6 @@
 # Imports
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
 import pathlib
 from transformations import ComposeDouble, normalize_01, AlbuSeg2d, FunctionWrapperDouble, create_dense_target
 from sklearn.model_selection import train_test_split
@@ -29,11 +31,12 @@ def get_filenames_of_path(path: pathlib.Path, ext: str = '*'):
 
 def main():
     if use_saved_data:
+        print("Use saved datasets")
         dataset_train = torch.load(path_temp / 'dataset_train.pt')
         dataset_valid = torch.load(path_temp / 'dataset_valid.pt')
 
     else:
-
+        print("Read and process new datasets")
         # input and target files
         inputs = get_filenames_of_path(path_data / 'ISIC2018_Task1-2_Training_Input', ext='*.jpg')
         targets = get_filenames_of_path(path_data / 'ISIC2018_Task1_Training_GroundTruth', ext='*.png')
@@ -126,8 +129,6 @@ def main():
                                        shuffle=True)
 
 
-    #%%
-
     # device
     if torch.cuda.is_available():
         device = torch.device('cuda')
@@ -148,7 +149,8 @@ def main():
     criterion = torch.nn.CrossEntropyLoss()
 
     # optimizer
-    optimizer = torch.optim.SGD(model.parameters(), lr=0.02)
+    # optimizer = torch.optim.SGD(model.parameters(), lr=0.2)
+    optimizer = torch.optim.Adam(model.parameters())
 
     # trainer
     trainer = Trainer(model=model,
@@ -158,29 +160,24 @@ def main():
                       training_DataLoader=dataloader_training,
                       validation_DataLoader=dataloader_validation,
                       lr_scheduler=None,
-                      epochs=10,
+                      epochs=50,
                       epoch=0,
-                      notebook=True)
+                      notebook=False)
 
     # start training
+    print("Start training")
     training_losses, validation_losses, lr_rates = trainer.run_trainer()
 
-    #%% md
-
-    ## Save the model
-
-    #%%
-
     # save the model
-    model_name = 'test.pt'
+    model_name = 'model_ep-50_Adam.pt'
     torch.save(model.state_dict(), path_output / model_name)
 
-    #%% md
+    # Plot results
+    fig = plot_training(training_losses, validation_losses, lr_rates, gaussian=True, sigma=1, figsize=(10, 4))
+    fig.savefig(path_output / "model_ep-50_Adam.jpg")
 
-    # Learning rate finder
 
-    #%%
-
+    # # Learning rate finder
     # # device
     # if torch.cuda.is_available():
     #     device = torch.device('cuda')
@@ -202,20 +199,15 @@ def main():
     #
     # # optimizer
     # optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
-
-
+    #
+    #
     # from lr_rate_finder import LearningRateFinder
     # lrf = LearningRateFinder(model, criterion, optimizer, device)
     # lrf.fit(dataloader_training, steps=1000)
-    #
-    # #%%
-    #
     # lrf.plot()
-
-    # Plot results
-    fig = plot_training(training_losses, validation_losses, lr_rates, gaussian=True, sigma=1, figsize=(10, 4))
-    fig.savefig(path_output / "test_1.jpg")
 
 
 if __name__ == '__main__':
     main()
+
+
