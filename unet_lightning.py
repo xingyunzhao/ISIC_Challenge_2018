@@ -1,7 +1,7 @@
 import torch
 import pytorch_lightning as pl
 
-from losses import DiceLoss
+from losses_kaggle import DiceLoss
 from torch.nn import CrossEntropyLoss
 
 

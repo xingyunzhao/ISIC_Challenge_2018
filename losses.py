@@ -1,187 +1,89 @@
-"""
-This script contains several losses implementations for PyTorch.
-There are also implementation code blocks for Keras, but those are not included here.
+from typing import Optional, Sequence, Union
 
-The original source is Loss Function Library - Keras & PyTorch from kaggle.com as below:
- https://www.kaggle.com/bigironsphere/loss-function-library-keras-pytorch
-"""
-
-import numpy
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-# import keras
-# import keras.backend as K
 
 
-class DiceLoss(nn.Module):
-    def __init__(self, weight=None, size_average=True):
-        super(DiceLoss, self).__init__()
+class CombinedLoss(torch.nn.Module):
+    """Defines a loss function as a weighted sum of combinable loss criteria.
+    Args:
+        criteria: List of loss criterion modules that should be combined.
+        weight: Weight assigned to the individual loss criteria (in the same
+            order as ``criteria``).
+        device: The device on which the loss should be computed. This needs
+            to be set to the device that the loss arguments are allocated on.
+    """
 
-    def forward(self, inputs, targets, smooth=1):
-        # comment out if your model contains a sigmoid or equivalent activation layer
-        inputs = F.sigmoid(inputs)
+    def __init__(
+        self,
+        criteria: Sequence[torch.nn.Module],
+        weight: Optional[Sequence[float]] = None,
+        device: torch.device = None,
+    ):
+        super().__init__()
+        self.criteria = torch.nn.ModuleList(criteria)
+        self.device = device
+        if weight is None:
+            weight = torch.ones(len(criteria))
+        else:
+            weight = torch.as_tensor(weight, dtype=torch.float32)
+            assert weight.shape == (len(criteria),)
+        self.register_buffer("weight", weight.to(self.device))
 
-        # flatten label and prediction tensors
-        inputs = inputs.view(-1)
-        targets = targets.view(-1)
-
-        intersection = (inputs * targets).sum()
-        dice = (2. * intersection + smooth) / (inputs.sum() + targets.sum() + smooth)
-
-        return 1 - dice
-
-
-class DiceBCELoss(nn.Module):
-    def __init__(self, weight=None, size_average=True):
-        super(DiceBCELoss, self).__init__()
-
-    def forward(self, inputs, targets, smooth=1):
-        # comment out if your model contains a sigmoid or equivalent activation layer
-        inputs = F.sigmoid(inputs)
-
-        # flatten label and prediction tensors
-        inputs = inputs.view(-1)
-        targets = targets.view(-1)
-
-        intersection = (inputs * targets).sum()
-        dice_loss = 1 - (2. * intersection + smooth) / (inputs.sum() + targets.sum() + smooth)
-        BCE = F.binary_cross_entropy(inputs, targets, reduction='mean')
-        Dice_BCE = BCE + dice_loss
-
-        return Dice_BCE
+    def forward(self, *args):
+        loss = torch.tensor(0.0, device=self.device)
+        for crit, weight in zip(self.criteria, self.weight):
+            loss += weight * crit(*args)
+        return loss
 
 
-class IoULoss(nn.Module):
-    def __init__(self, weight=None, size_average=True):
-        super(IoULoss, self).__init__()
-
-    def forward(self, inputs, targets, smooth=1):
-        # comment out if your model contains a sigmoid or equivalent activation layer
-        inputs = F.sigmoid(inputs)
-
-        # flatten label and prediction tensors
-        inputs = inputs.view(-1)
-        targets = targets.view(-1)
-
-        # intersection is equivalent to True Positive count
-        # union is the mutually inclusive area of all labels & predictions
-        intersection = (inputs * targets).sum()
-        total = (inputs + targets).sum()
-        union = total - intersection
-
-        IoU = (intersection + smooth) / (union + smooth)
-
-        return 1 - IoU
+def _channelwise_sum(x: torch.Tensor):
+    """Sum-reduce all dimensions of a tensor except dimension 1 (C)"""
+    reduce_dims = tuple([0] + list(range(x.dim()))[2:])  # = (0, 2, 3, ...)
+    return x.sum(dim=reduce_dims)
 
 
-ALPHA = 0.8
-GAMMA = 2
+def dice_loss(probs, target, weight=1.0, eps=0.0001, smooth=0.0):
+    tsh, psh = target.shape, probs.shape
+
+    if tsh == psh:  # Already one-hot
+        onehot_target = target.to(probs.dtype)
+    elif (
+        tsh[0] == psh[0] and tsh[1:] == psh[2:]
+    ):  # Assume dense target storage, convert to one-hot
+        onehot_target = torch.zeros_like(probs)
+        onehot_target.scatter_(1, target.unsqueeze(1), 1)
+    else:
+        raise ValueError(
+            f"Target shape {target.shape} is not compatible with output shape {probs.shape}."
+        )
+
+    intersection = probs * onehot_target  # (N, C, ...)
+    numerator = 2 * _channelwise_sum(intersection) + smooth  # (C,)
+    denominator = probs + onehot_target  # (N, C, ...)
+    denominator = _channelwise_sum(denominator) + smooth + eps  # (C,)
+    loss_per_channel = 1 - (numerator / denominator)  # (C,)
+    weighted_loss_per_channel = weight * loss_per_channel  # (C,)
+    return weighted_loss_per_channel.mean()  # ()
 
 
-class FocalLoss(nn.Module):
-    def __init__(self, weight=None, size_average=True):
-        super(FocalLoss, self).__init__()
+class DiceLoss(torch.nn.Module):
+    def __init__(
+        self,
+        apply_softmax: bool = True,
+        weight: Optional[torch.Tensor] = None,
+        smooth: float = 0.0,
+    ):
+        super().__init__()
+        if apply_softmax:
+            self.softmax = torch.nn.Softmax(dim=1)
+        else:
+            self.softmax = lambda x: x  # Identity (no softmax)
+        self.dice = dice_loss
+        if weight is None:
+            weight = torch.tensor(1.0)
+        self.register_buffer("weight", weight)
+        self.smooth = smooth
 
-    def forward(self, inputs, targets, alpha=ALPHA, gamma=GAMMA, smooth=1):
-        # comment out if your model contains a sigmoid or equivalent activation layer
-        inputs = F.sigmoid(inputs)
-
-        # flatten label and prediction tensors
-        inputs = inputs.view(-1)
-        targets = targets.view(-1)
-
-        # first compute binary cross-entropy
-        BCE = F.binary_cross_entropy(inputs, targets, reduction='mean')
-        BCE_EXP = torch.exp(-BCE)
-        focal_loss = alpha * (1 - BCE_EXP) ** gamma * BCE
-
-        return focal_loss
-
-
-ALPHA = 0.5
-BETA = 0.5
-
-class TverskyLoss(nn.Module):
-    def __init__(self, weight=None, size_average=True):
-        super(TverskyLoss, self).__init__()
-
-    def forward(self, inputs, targets, smooth=1, alpha=ALPHA, beta=BETA):
-        # comment out if your model contains a sigmoid or equivalent activation layer
-        inputs = F.sigmoid(inputs)
-
-        # flatten label and prediction tensors
-        inputs = inputs.view(-1)
-        targets = targets.view(-1)
-
-        # True Positives, False Positives & False Negatives
-        TP = (inputs * targets).sum()
-        FP = ((1 - targets) * inputs).sum()
-        FN = (targets * (1 - inputs)).sum()
-
-        Tversky = (TP + smooth) / (TP + alpha * FP + beta * FN + smooth)
-
-        return 1 - Tversky
-
-
-ALPHA = 0.5
-BETA = 0.5
-GAMMA = 1
-
-
-class FocalTverskyLoss(nn.Module):
-    def __init__(self, weight=None, size_average=True):
-        super(FocalTverskyLoss, self).__init__()
-
-    def forward(self, inputs, targets, smooth=1, alpha=ALPHA, beta=BETA, gamma=GAMMA):
-        # comment out if your model contains a sigmoid or equivalent activation layer
-        inputs = F.sigmoid(inputs)
-
-        # flatten label and prediction tensors
-        inputs = inputs.view(-1)
-        targets = targets.view(-1)
-
-        # True Positives, False Positives & False Negatives
-        TP = (inputs * targets).sum()
-        FP = ((1 - targets) * inputs).sum()
-        FN = (targets * (1 - inputs)).sum()
-
-        Tversky = (TP + smooth) / (TP + alpha * FP + beta * FN + smooth)
-        FocalTversky = (1 - Tversky) ** gamma
-
-        return FocalTversky
-
-
-# class LovaszHingeLoss(nn.Module):
-#     def __init__(self, weight=None, size_average=True):
-#         super(LovaszHingeLoss, self).__init__()
-#
-#     def forward(self, inputs, targets):
-#         inputs = F.sigmoid(inputs)
-#         Lovasz = lovasz_hinge(inputs, targets, per_image=False)
-#         return Lovasz
-#
-#
-# ALPHA = 0.5  # < 0.5 penalises FP more, > 0.5 penalises FN more
-# CE_RATIO = 0.5  # weighted contribution of modified CE loss compared to Dice loss
-#
-#
-# class ComboLoss(nn.Module):
-#     def __init__(self, weight=None, size_average=True):
-#         super(ComboLoss, self).__init__()
-#
-#     def forward(self, inputs, targets, smooth=1, alpha=ALPHA, beta=BETA):
-#         # flatten label and prediction tensors
-#         inputs = inputs.view(-1)
-#         targets = targets.view(-1)
-#
-#         # True Positives, False Positives & False Negatives
-#         intersection = (inputs * targets).sum()
-#         dice = (2. * intersection + smooth) / (inputs.sum() + targets.sum() + smooth)
-#
-#         inputs = torch.clamp(inputs, e, 1.0 - e)
-#         out = - (ALPHA * ((targets * torch.log(inputs)) + ((1 - ALPHA) * (1.0 - targets) * torch.log(1.0 - inputs))))
-#         weighted_ce = out.mean(-1)
-#         combo = (CE_RATIO * weighted_ce) - ((1 - CE_RATIO) * dice)
-#
-#         return combo
+    def forward(self, output, target):
+        probs = self.softmax(output)
+        return self.dice(probs, target, weight=self.weight, smooth=self.smooth)
